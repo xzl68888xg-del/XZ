@@ -1,0 +1,16 @@
+/** 玄光分布式中台主账户状态映射 */
+export enum UserStatus {
+  DISABLED = 0, // 挂起禁用
+  ENABLED = 1,  // 正常准入
+  LOCKED = 2    // 熔断锁定（安全风险拦截）
+}
+
+/** 强一致性账户账变原子类型枚举 (与 PostgreSQL 表约束严格双向对齐) */
+export enum AccountRecordType {
+  RECHARGE = 'RECHARGE',       // 外部接入：额度充值灌注
+  WITHDRAW = 'WITHDRAW',       // 外部清算：额度审计提现
+  BET = 'BET',                 // 算力消费：沙箱容器运行扣款
+  WIN = 'WIN',                 // 分布式分发：外部计算成果入账
+  REFUND = 'REFUND',           // 事务异常自愈：网关超时资金冲正
+  ADMIN_ADD = 'ADMIN_ADD'      // 运维权限：系统管理员划转调账
+}
