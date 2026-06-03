@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xgcm-admin-web
+  namespace: xuanguang-core
+  labels:
+    app: admin-web
+spec:
+  replicas: 3 # 启动3个高隔离物理容器实例做负载均衡
+  selector:
+    matchLabels:
+      app: admin-web
+  template:
+    metadata:
+      labels:
+        app: admin-web
+    spec:
+      containers:
+      - name: admin-web-container
+        image: registry.xuanguang.com/core/admin-web:v3.2.0 # 您的私有镜像
+        ports:
+        - containerPort: 80
+        resources: # 严苛的算力资源配额限制，防止单容器内存泄露挤爆宿主机
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe: # 容器存活探针：自动健康自愈机制
+          httpGet:
+            path: /index.html
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: xgcm-admin-service
+  namespace: xuanguang-core
+spec:
+  selector:
+    app: admin-web
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: ClusterIP # 内部虚拟集群 IP，后续通过 Ingress 网关统一对外暴露并挂载 SSL 安全证书
