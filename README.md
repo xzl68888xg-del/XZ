@@ -1,6 +1,3 @@
-这是一份专为 **XuanGuang Centralized Tech Mid-ground (XGCM)** 量身定制的企业级 README.md 文档。它延续了极致脱敏、高度专业化的技术语境，完美适配您当前的 Monorepo 架构。
-您可以直接将以下内容复制并保存为项目根目录下的 README.md 文件，作为向开发团队、审计人员或 DevOps 工程师展示的核心技术说明书。
-```markdown
 # 🌐 XuanGuang Centralized Tech Mid-ground (XGCM)
 
 ![Version](https://img.shields.io/badge/version-v3.2.0%20Enterprise-blue.svg)
