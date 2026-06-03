@@ -14,3 +14,185 @@ export enum AccountRecordType {
   REFUND = 'REFUND',           // 事务异常自愈：网关超时资金冲正
   ADMIN_ADD = 'ADMIN_ADD'      // 运维权限：系统管理员划转调账
 }
+
+<Select.Option value="AG">AG 高保真流控制</Select.Option>
+            <Select.Option value="CQ9">CQ9 强策略矩阵</Select.Option>
+          </Select>
+        </Space>
+        
+        <Button type="primary" icon={<FileExcelOutlined />} onClick={() => setIsModalOpen(true)}>
+          批量导入外部通道代码
+        </Button>
+      </Space>
+
+      <Table dataSource={modules} columns={columns} rowKey="moduleCode" loading={loading} pagination={{ pageSize: 10 }} />
+
+      {/* 批量同步弹窗 */}
+      <Modal
+        title="批量同步外部应用网关"
+        open={isModalOpen}
+        onOk={submitBulkModules}
+        onCancel={() => { setIsModalOpen(false); setImportData([]); }}
+        okText={`确认注入 (${importData.length}个节点)`}
+        cancelText="取消"
+        confirmLoading={loading}
+        okButtonProps={{ disabled: importData.length === 0 }}
+        width={700}
+      >
+        <div style={{ margin: '20px 0' }}>
+          <Upload beforeUpload={handleExcelParse} accept=".xlsx, .xls" showUploadList={false}>
+            <Button icon={<UploadOutlined />}>选择厂商分配的 Excel 算力矩阵列表</Button>
+          </Upload>
+        </div>
+        
+        {importData.length > 0 && (
+          <Table 
+            dataSource={importData.slice(0, 5)} // 弹窗内只预览前5条，防止大容量数据撑爆弹窗
+            columns={columns.slice(0, 4)} 
+            rowKey="moduleCode" 
+            pagination={false} 
+            size="small"
+            footer={() => `...以及其余 ${importData.length - 5} 个集成节点（仅预览前5条配置快照）`}
+          />
+        )}
+      </Modal>
+    </Card>
+  );
+};
+
+import { Pool } from 'pg';
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// 批量同步外部应用矩阵列表
+fastify.post('/api/admin/modules/bulk-import', { preHandler: [fastify.authenticate] }, async (request, reply) => {
+  const { modules } = request.body as { modules: Array<{ moduleCode: string; moduleName: string; category: string; provider: string; status: number }> };
+  
+  if (!modules || modules.length === 0) {
+    return reply.status(400).send({ code: 400, message: '数据包为空，无法执行配置下发' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 采用高效的批量构建方案，利用 PostgreSQL 的 ON CONFLICT DO UPDATE 实现平滑覆写
+    for (const mod of modules) {
+      await client.query(
+        `INSERT INTO modules (module_code, module_name, category, provider, status)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (module_code) 
+         DO UPDATE SET 
+            module_name = EXCLUDED.module_name,
+            category = EXCLUDED.category,
+            provider = EXCLUDED.provider,
+            status = EXCLUDED.status,
+            updated_at = NOW()`,
+        [mod.moduleCode, mod.moduleName, mod.category, mod.provider, mod.status]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { code: 200, message: '全局节点矩阵同步成功', timestamp: Date.now() };
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    // 💡 核心修复：已补充反引号，修复模板字符串语法错误
+    return reply.status(500).send({ code: 500, message: `数据库写入失败: ${error.message}` });
+  } finally {
+    client.release();
+  }
+});
+
+// 提供给前端大厅或后台的矩阵检索接口
+fastify.get('/api/admin/modules/list', async (request, reply) => {
+  const { provider } = request.query as { provider: string };
+  let queryStr = 'SELECT module_code as "moduleCode", module_name as "moduleName", category, provider, status FROM modules';
+  const params = [];
+
+  if (provider && provider !== 'ALL') {
+    queryStr += ' WHERE provider = $1';
+    params.push(provider);
+  }
+  
+  queryStr += ' ORDER BY sort_order DESC, id DESC';
+  
+  const res = await pool.query(queryStr, params);
+  return { code: 200, message: 'success', data: res.rows };
+});
+
+import React, { useState, useEffect } from 'react';
+import { Card, Col, Row, Tag, Button, Spin, Modal, Space } from 'antd';
+import { PlayCircleOutlined, WalletOutlined, ReloadOutlined, CloseOutlined } from '@ant-design/icons';
+import axios from 'axios'; // 实际项目中建议使用带 User-Token 的 axios 拦截器实例
+
+interface CoreModule {
+  moduleCode: string;
+  moduleName: string;
+  category: string;
+  provider: string;
+}
+
+export const ClientLobby: React.FC = () => {
+  const [modules, setModules] = useState<CoreModule[]>([]);
+  const [balance, setBalance] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  
+  // 隔离沙箱激活状态
+  const [containerUrl, setContainerUrl] = useState<string | null>(null);
+  const [isContainerActive, setIsContainerActive] = useState<boolean>(false);
+
+  // 1. 获取中台主网关可用额度
+  const fetchBalance = async () => {
+    setRefreshing(true);
+    try {
+      const res = await axios.get('/api/user/balance'); // 后端需开放此接口
+      if (res.data.code === 200) {
+        setBalance(res.data.data.balance);
+      }
+    } catch (err) {
+      console.error('刷新网关额度失败');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // 2. 获取大厅集成的可用算力模块列表
+  const fetchModules = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get('/api/admin/modules/list?provider=ALL');
+      if (res.data.code === 200) {
+        setModules(res.data.data);
+      }
+    } catch (err) {
+      console.error('加载中台应用矩阵失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchBalance();
+    fetchModules();
+  }, []);
+
+  // 补全：启动隔离沙箱逻辑
+  const launchContainer = async (moduleCode: string, provider: string) => {
+    try {
+       const res = await axios.post('/api/user/modules/launch', { moduleCode, provider });
+       if (res.data.code === 200) {
+           setContainerUrl(res.data.data.url);
+           setIsContainerActive(true);
+       }
+    } catch (err) {
+       console.error('沙箱初始化失败');
+    }
+  };
+
+  // ... 渲染逻辑 (此处可承接之前生成的 ClientLobby UI 骨架)
+  return (
+    <div>
+        {/* 组件 UI 代码 */}
+    </div>
+  );
+};
