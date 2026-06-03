@@ -1,0 +1,75 @@
+import { Pool } from 'pg';
+import dotenv from 'dotenv';
+dotenv.config();
+
+export const pool = new Pool({ 
+  connectionString: process.env.DATABASE_URL,
+  max: 20, // 设置最大连接数防止拥堵
+  idleTimeoutMillis: 30000 
+});
+
+import { FastifyInstance } from 'fastify';
+import { pool } from '../db';
+import { AccountRecordType } from '@sys/shared';
+
+export default async function walletGatewayRoutes(fastify: FastifyInstance) {
+  fastify.post('/api/callback/v1/wallet', async (request, reply) => {
+    const { userId, action, amount, transferId } = request.body as {
+      userId: number; action: 'DEBIT' | 'CREDIT'; amount: number; transferId: string;
+    };
+
+    if (!userId || !action || amount <= 0 || !transferId) {
+      return reply.status(400).send({ error: 'BAD_REQUEST', message: '核心协议参数校验失败' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [userId]);
+      if (userRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return reply.status(404).send({ error: 'USER_NOT_FOUND', message: '中台账户不存在' });
+      }
+
+      const balanceBefore = Number(userRes.rows[0].balance);
+      let balanceAfter = balanceBefore;
+      let recordType: AccountRecordType;
+
+      if (action === 'DEBIT') {
+        if (balanceBefore < amount) {
+          await client.query('ROLLBACK');
+          return reply.status(400).send({ error: 'INSUFFICIENT_BALANCE', message: '可用配额不足' });
+        }
+        balanceAfter = balanceBefore - amount;
+        recordType = AccountRecordType.BET;
+      } else {
+        balanceAfter = balanceBefore + amount;
+        recordType = AccountRecordType.WIN;
+      }
+
+      // 幂等性防御拦截
+      const duplicateCheck = await client.query('SELECT id FROM account_records WHERE order_no = $1 LIMIT 1', [transferId]);
+      if (duplicateCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return reply.send({ status: 'SUCCESS', balance: balanceBefore });
+      }
+
+      // 精确更新并追加审计流水 (已修复模板字符串报错问题)
+      await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2', [balanceAfter, userId]);
+      await client.query(
+        `INSERT INTO account_records (user_id, order_no, type, amount, balance_before, balance_after, remark) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [userId, transferId, recordType, action === 'DEBIT' ? -amount : amount, balanceBefore, balanceAfter, `外部API接入网关流转单号:${transferId}`]
+      );
+
+      await client.query('COMMIT');
+      return reply.send({ status: 'SUCCESS', balance: balanceAfter, timestamp: Date.now() });
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: error.message });
+    } finally {
+      client.release();
+    }
+  });
+}
