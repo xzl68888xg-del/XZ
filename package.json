@@ -1,0 +1,17 @@
+{
+  "name": "xuanguang-central-midground",
+  "version": "3.2.0",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev:server": "pnpm --filter @sys/server-api run dev",
+    "dev:user": "pnpm --filter @sys/user-web run dev",
+    "dev:admin": "pnpm --filter @sys/admin-web run dev",
+    "build": "pnpm --filter \"@sys/*\" build"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.4"
+  }
+}
